@@ -142,9 +142,9 @@ async def main_program_logic(config: dict):
                 try:
                     # Ensure client is valid before creating ModbusScanner
                     client = connector.get_client()
-                    if not client or not client.is_active:
-                        logger.error(f"Client for {ip} is not active/valid before scanning unit {unit_id}. Should not happen if connect succeeded.")
-                        unit_data["error"] = "Client connection lost or invalid"
+                    if not client: # Removed 'is_active' check
+                        logger.error(f"Client for {ip} is not available before scanning unit {unit_id}. Should not happen if connect succeeded and connector.get_client() returned a client.")
+                        unit_data["error"] = "Client not available from connector"
                         ip_scan_data["units"].append(unit_data)
                         progress.advance(unit_scan_task)
                         continue # to next unit id, or perhaps break from units for this IP
