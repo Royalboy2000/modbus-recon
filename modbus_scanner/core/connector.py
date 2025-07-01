@@ -86,35 +86,6 @@ class ModbusConnector:
         return self.client if self.client and self.client.is_active else None
 
 # Example usage (for testing purposes, will be removed or moved to tests)
-async def main_test():
-    console = None
-    try:
-        from rich.console import Console
-        console = Console()
-        logging.basicConfig(level="DEBUG", format="%(message)s", handlers=[from rich.logging import RichHandler; RichHandler(console=console)])
-    except ImportError:
-        logging.basicConfig(level="DEBUG", format="%(asctime)s - %(levelname)s - %(message)s")
-
-
-    # Replace with a real or simulated Modbus server IP for testing
-    # For now, this will likely fail unless a server is at localhost
-    test_host = "localhost"
-    # test_host = "102.222.4.82" # Target from prompt - DO NOT RUN WITHOUT PERMISSION
-
-    connector = ModbusConnector(host=test_host, port=502, timeout=2.0)
-    if await connector.connect():
-        logger.info("Connection successful. Client is active.")
-        client = connector.get_client()
-        if client:
-            logger.info(f"Client details: {client}")
-        await connector.disconnect()
-    else:
-        logger.error("Connection failed.")
-
-if __name__ == "__main__":
-    # This is just for quick testing of this module.
-    # Run `python -m modbus_scanner.core.connector` from the project root.
-    # You'll need a Modbus TCP server running on localhost:502 for the test to succeed.
-    # A simple simulator like 'diagslave' can be used:
-    # `diagslave -m tcp -p 502`
-    asyncio.run(main_test())
+# The main_test() function and its call are removed to prevent syntax errors
+# during import, as this file is not intended to be run directly anymore.
+# For module-specific tests, use the unittest framework in the tests/ directory.

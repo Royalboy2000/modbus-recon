@@ -1,0 +1,6 @@
+target: "10.0.0.1-5" # This will be overridden by CLI arg if provided
+port: 5020
+unit_ids: "10-15"
+timeout: 0.5
+fast_scan: true
+output_prefix: "test_run_config"

@@ -60,4 +60,39 @@ To create a professional-grade Modbus TCP reconnaissance and enumeration script 
 4.  Implement configuration file loading.
 5.  Basic TUI output for progress and results.
 
+### Recently Added Modules & Workflow (as of completing initial core scanning workflow)
+
+*   **`modbus_scanner/utils/config_loader.py`**:
+    *   Handles loading YAML configuration files (`load_config_file`).
+    *   Merges CLI arguments with file configurations and defaults (`merge_configs`).
+    *   `DEFAULT_CONFIG_VALUES` provides a base set of defaults.
+*   **`modbus_scanner/utils/network_utils.py`**:
+    *   `parse_ip_targets`: Parses strings containing single IPs, IP ranges (e.g., `192.168.1.1-100` or `192.168.1.10-20`), CIDR notation (`192.168.1.0/24`), and comma-separated lists of these. Uses the `ipaddress` standard library module. Returns a sorted list of unique IP strings.
+*   **`modbus_scanner/utils/param_parser.py`**:
+    *   `parse_unit_ids`: Parses strings containing comma-separated unit IDs and ranges (e.g., `1,5,10-20`). Returns a sorted list of unique integers, clamped within a min/max range (default 0-255).
+*   **`modbus_scanner/main.py`**:
+    *   `main()`: Synchronous entry point. Handles argument parsing, sets up initial logging (including verbosity and color options), loads configuration using `config_loader`, and then calls `asyncio.run(main_program_logic(...))`.
+    *   `main_program_logic(config: dict)`: Asynchronous function.
+        *   Parses IP targets and unit IDs using `network_utils` and `param_parser`.
+        *   Iterates through each target IP:
+            *   Uses `ModbusConnector` (`core/connector.py`) to establish a connection.
+            *   If connected, iterates through each Unit ID:
+                *   Uses `ModbusScanner` (`core/scanner.py`) to perform operations.
+                *   Currently calls `check_function_code_support()`.
+            *   Handles connection and scanning errors.
+            *   Disconnects after scanning an IP.
+        *   Uses `rich.progress.Progress` for visual feedback on IP and Unit ID scanning progress.
+        *   Collects basic results (connection status, FC support per unit) into `all_results`.
+*   **Logging**:
+    *   A dedicated logger `modbus_scanner_app` is used for application messages.
+    *   Verbosity levels (`-v`, `-vv`, `-vvv`) control the log levels for both `modbus_scanner_app` and the `pymodbus` library logger.
+    *   `RichHandler` is used for console logging.
+
+### Next Steps (High-Level)
+
+1.  **Enhance `ModbusScanner.py`**: Implement `discover_valid_ranges_and_dump` for FC1-4, including more robust adaptive scanning logic.
+2.  **Output Writers**: Implement functions in `output/writers.py` for JSON and CSV output.
+3.  **TUI Enhancements**: Use `rich.Table` for better result display.
+4.  **Fingerprinting**: Add basic device fingerprinting capabilities.
+
 Good luck! I'm looking forward to seeing this tool develop.Tool output for `create_file_with_block`:

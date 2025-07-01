@@ -319,7 +319,6 @@ async def main_test_scanner():
 
     await client.close()
 
-if __name__ == "__main__":
-    # Run `python -m modbus_scanner.core.scanner` from the project root
-    # Requires a Modbus TCP server (e.g., `diagslave -m tcp -p 502`)
-    asyncio.run(main_test_scanner())
+# The main_test_scanner() function and its call are removed to prevent syntax errors
+# during import, as this file is not intended to be run directly anymore.
+# For module-specific tests, use the unittest framework in the tests/ directory.
