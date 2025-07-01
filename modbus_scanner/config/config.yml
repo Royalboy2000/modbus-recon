@@ -1,0 +1,91 @@
+# Default configuration for Modbus Scanner
+# Command-line arguments will override these settings.
+
+# Target specification (Not typically set here if using CLI for target, but shown for structure)
+# target: "192.168.1.10" # Example: single IP
+# target: "192.168.1.1-192.168.1.100" # Example: IP range
+# target: "192.168.1.0/24" # Example: CIDR
+
+# Default Modbus TCP port
+port: 502
+
+# Unit IDs to scan
+# Comma-separated list, ranges, or a mix.
+# Example: "1,2,3,5-10,20"
+unit_ids: "1-247" # Default wide range, often only 1 is used or relevant.
+
+# Connection and Request Timeouts (in seconds)
+# connect_timeout: Timeout for establishing the initial TCP connection.
+# response_timeout: Timeout for waiting for a response to a Modbus request.
+# Note: pymodbus client timeout is often a single value used for socket operations.
+# We'll map our conceptual timeouts to what the library supports.
+timeout: 1.0 # General timeout for Modbus operations.
+
+# Scan Behavior
+# fast_scan: If true, performs a quicker scan.
+#   - Limits register checks (e.g., only check FC support, don't dump all registers).
+#   - May not try as hard on error recovery.
+fast_scan: false
+
+# Register/Coil Enumeration Settings
+# max_register_address: The highest register address to attempt to read for FC3, FC4.
+max_register_address: 9999 # Common default, but some devices go higher (up to 65535)
+# max_coil_address: The highest coil/discrete input address to attempt to read for FC1, FC2.
+max_coil_address: 9999   # Common default
+
+# Read Counts: How many items to attempt to read in a single Modbus request.
+# These should be balanced to be efficient but not overwhelm the device or exceed PDU limits.
+# Max PDU for Modbus RTU/ASCII is 256 bytes. For TCP, this limit is on the Modbus Application Protocol (MAP) part.
+# Max registers (2 bytes each) = ~123-125 registers.
+# Max coils/inputs (1 bit each, packed) = ~2000.
+# Let's be conservative. These values are used in scanner.py as defaults.
+# These can be overridden here if needed for specific scenarios.
+# read_count_registers: 100
+# read_count_coils: 800
+
+# Auto-delay between requests (in seconds, can be fractional e.g., 0.1 for 100ms)
+# Useful for preventing flooding or overloading sensitive devices.
+# 0 means no artificial delay beyond standard network/processing time.
+request_delay: 0.0
+
+# Output Options
+# output_formats: List of formats to generate (e.g., ["json", "csv", "html", "md"])
+# This will be primarily controlled by CLI arguments or TUI settings for now.
+# output_prefix: Default prefix for output filenames (CLI overrides this)
+# output_directory: Directory to save report files.
+# output_directory: "reports"
+
+# Data Parsing Options
+# attempt_byte_swap: Try different byte/word orders if initial parsing seems off. (Not yet implemented)
+# attempt_word_swap: (Not yet implemented)
+# value_interpretation_rules: (Advanced, for future) Rules to identify common values like temperatures, states.
+
+# Logging Level (for file logging, console is controlled by -v flags)
+# Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
+# log_level: "INFO"
+# log_file: "modbus_scan.log"
+
+# Optional: Device-specific overrides
+# Example:
+# device_profiles:
+#   - name: "Schneider PLC TM221"
+#     ip_match: "192.168.1.50" # or a pattern
+#     unit_id: 1
+#     known_holding_registers: # list of known important registers
+#       - address: 40000 # MW0
+#         description: "Device Status Word"
+#         type: "uint16" # or "bits", "string", etc.
+#     disabled_fc: [43] # Don't try Read Device Identification
+# (This device_profiles section is for future advanced functionality)
+
+# --- TUI Settings (Conceptual) ---
+# refresh_interval: How often the TUI updates data (in seconds)
+# tui_refresh_interval: 1.0
+# color_scheme: (e.g., "default", "dark", "light") - Rich handles this well automatically.
+
+# --- Parallelism ---
+# max_concurrent_hosts: Number of hosts to scan concurrently.
+# max_concurrent_hosts: 10
+# max_concurrent_units_per_host: Number of unit IDs to scan concurrently for a single host.
+# max_concurrent_units_per_host: 5
+# (These require asyncio implementation to be fully effective)

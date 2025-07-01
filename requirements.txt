@@ -1,0 +1,7 @@
+pymodbus>=3.6.0 # Using a recent version for better asyncio support and features
+rich>=13.0.0
+PyYAML>=6.0
+# scapy # Optional, for more advanced network discovery, will add later if needed
+# asyncio # Built-in, but good to note for parallel scanning
+# tkinter # Optional, for GUI, will add later if needed
+# PyQt5 # Optional, for GUI, will add later if needed
