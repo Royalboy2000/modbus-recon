@@ -33,14 +33,19 @@ class ModbusConnector:
 
         :return: True if connection is successful, False otherwise.
         """
-        if self.client and self.client.is_active:
-            logger.debug(f"Already connected to {self.host}:{self.port}")
-            return True
+        # Removed: if self.client and self.client.is_active:
+        # The logic implies that if a client exists and connect() is called again,
+        # it might be a reconnect attempt or an error if already connected.
+        # Pymodbus's AsyncModbusTcpClient.connect() handles its own state.
+        # If self.client already exists from a previous attempt, re-assigning it is fine.
 
         self.client = AsyncModbusTcpClient(self.host, port=self.port, timeout=self.timeout)
         logger.debug(f"Attempting to connect to {self.host}:{self.port}...")
         try:
-            if await self.client.connect():
+            # The connect() method itself returns True on success, False on failure for some clients,
+            # or raises an exception. For AsyncModbusTcpClient, it returns a boolean.
+            connection_successful = await self.client.connect()
+            if connection_successful:
                 logger.info(f"Successfully connected to Modbus server at [green]{self.host}:{self.port}[/green]")
                 return True
             else:
@@ -70,20 +75,24 @@ class ModbusConnector:
         """
         Closes the connection to the Modbus TCP server.
         """
-        if self.client and self.client.is_active:
+        if self.client: # Check if client exists
             logger.debug(f"Disconnecting from {self.host}:{self.port}")
-            self.client.close() # For AsyncModbusTcpClient, close is synchronous but should be called
-            # await self.client.close() # In some versions or if it becomes async
+            self.client.close() # For AsyncModbusTcpClient, close is synchronous.
+            # If close were async: await self.client.close()
             logger.info(f"Disconnected from [green]{self.host}:{self.port}[/green]")
-        self.client = None
+        else:
+            logger.debug(f"Disconnect called but no active client for {self.host}:{self.port}")
+        self.client = None # Ensure client is reset
 
     def get_client(self) -> AsyncModbusTcpClient | None:
         """
-        Returns the active Modbus client.
+        Returns the Modbus client instance.
+        The caller is responsible for checking if the client is connected/usable if needed,
+        though typically operations will fail if not connected.
 
-        :return: The AsyncModbusTcpClient instance if connected, else None.
+        :return: The AsyncModbusTcpClient instance or None if not initialized.
         """
-        return self.client if self.client and self.client.is_active else None
+        return self.client # Removed: and self.client.is_active
 
 # Example usage (for testing purposes, will be removed or moved to tests)
 # The main_test() function and its call are removed to prevent syntax errors

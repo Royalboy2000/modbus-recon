@@ -56,8 +56,9 @@ class ModbusScanner:
         self.unit_id = unit_id
         self.default_timeout = default_timeout # Not directly used by client calls here, but good for reference
                                              # The client itself is configured with a timeout.
-        if not self.client or not self.client.is_active:
-            raise ValueError("Modbus client is not connected or invalid.")
+        if not self.client: # Simpler check: ensure a client object is passed.
+            # The responsibility for the client being connected lies with the code that calls the scanner.
+            raise ValueError("Modbus client has not been provided to ModbusScanner.")
         logger.debug(f"ModbusScanner initialized for Unit ID {self.unit_id}")
 
     async def _execute_read_request(self, fc: int, address: int, count: int) -> Optional[Any]:
