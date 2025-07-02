@@ -91,9 +91,10 @@ async def main_program_logic(config: dict):
     all_results = []
 
     # --- Actual Scanning Logic ---
+    # --- Actual Scanning Logic ---
     from modbus_scanner.core.connector import ModbusConnector
     from modbus_scanner.core.scanner import ModbusScanner
-    from rich.live import Live
+    # Removed: from rich.live import Live # No longer using nested Live
     from rich.table import Table
     from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn, TimeElapsedColumn, SpinnerColumn
 
@@ -135,139 +136,101 @@ async def main_program_logic(config: dict):
 
             # Data structure to hold unit scan information for the live table
             # Dict: {unit_id: [status_str, fc_support_str, details_str]}
-            live_unit_display_data = {}
+            live_unit_display_data = {}  # Stores display strings for units of the current IP
 
-            # Define the table for live updates for the current IP
-            unit_table = Table(title=f"Units for {ip} - Connecting...")
-            unit_table.add_column("Unit ID", style="dim", width=10)
-            unit_table.add_column("Status", width=25)
-            unit_table.add_column("FC Support", width=30)
-            unit_table.add_column("Details", no_wrap=False) # Allow wrapping for longer error messages
+            # unit_scan_task = overall_progress.add_task(f"  Units for {ip}", total=len(unit_ids_to_scan), visible=False) # Add but keep invisible initially
 
-            with Live(unit_table, console=console, refresh_per_second=5, transient=True) as live:
-                for unit_idx, unit_id in enumerate(unit_ids_to_scan):
-                    # Initial status for the unit
-                    live_unit_display_data[unit_id] = [
-                        f"[cyan]Probing FCs ({unit_idx+1}/{len(unit_ids_to_scan)})...[/cyan]", "", ""
-                    ]
+            for unit_idx, unit_id in enumerate(unit_ids_to_scan):
+                # overall_progress.update(unit_scan_task, advance=0, description=f"  Scanning Unit ID: {unit_id} for {ip} ({unit_idx+1}/{len(unit_ids_to_scan)})", visible=True)
+                overall_progress.console.print(f"  [steel_blue]-> Probing Unit ID: {unit_id} on {ip} ({unit_idx+1}/{len(unit_ids_to_scan)})[/steel_blue]")
 
-                    # Rebuild and update table
-                    current_title = f"Units for {ip} - Scanning Unit {unit_id} ({unit_idx+1}/{len(unit_ids_to_scan)})"
-                    temp_table = Table(title=current_title)
-                    temp_table.add_column("Unit ID", style="dim", width=10)
-                    temp_table.add_column("Status", width=25)
-                    temp_table.add_column("FC Support", width=30)
-                    temp_table.add_column("Details", no_wrap=False)
-                    for uid_disp in sorted(live_unit_display_data.keys()):
-                        status, fc_str, details_str = live_unit_display_data[uid_disp]
-                        temp_table.add_row(str(uid_disp), status, fc_str, details_str)
-                    live.update(temp_table)
+                unit_data_for_results = {"unit_id": unit_id}
+                fc_support_str = "[red]N/A[/red]"
+                details_str = ""
+                status_str = "[red]Error[/red]"
 
-                    unit_data_for_results = {"unit_id": unit_id}
-                    fc_support_str = "[red]Error[/red]" # Default in case of early exit
-                    details_str = ""
 
-                    try:
-                        client = connector.get_client()
-                        if not client:
-                            error_msg = "Client not available from connector."
-                            logger.error(f"Unit {unit_id} on {ip}: {error_msg}")
-                            live_unit_display_data[unit_id] = ["[red]Client Error[/red]", "", error_msg]
-                            unit_data_for_results["error"] = error_msg
-                            ip_scan_data["units"].append(unit_data_for_results)
-                            # No need to advance overall_progress unit_scan_task here, it's removed
-                            continue
+                try:
+                    client = connector.get_client()
+                    if not client:
+                        error_msg = "Client not available from connector."
+                        logger.error(f"Unit {unit_id} on {ip}: {error_msg}")
+                        details_str = error_msg
+                        unit_data_for_results["error"] = error_msg
+                        ip_scan_data["units"].append(unit_data_for_results)
+                        # overall_progress.advance(unit_scan_task)
+                        continue
 
-                        modbus_scanner = ModbusScanner(client=client, unit_id=unit_id)
+                    modbus_scanner = ModbusScanner(client=client, unit_id=unit_id)
 
-                        fc_support = await modbus_scanner.check_function_code_support()
-                        unit_data_for_results["fc_support"] = fc_support
+                    # Check Function Code Support
+                    fc_support = await modbus_scanner.check_function_code_support()
+                    unit_data_for_results["fc_support"] = fc_support
 
-                        supported_fcs = [fc for fc, supported in fc_support.items() if supported]
-                        if not supported_fcs:
-                            fc_support_str = "[yellow]None[/yellow]"
-                        else:
-                            fc_support_str = ", ".join([f"[green]FC{fc}[/green]" for fc in supported_fcs])
+                    supported_fcs = [fc for fc, supported_val in fc_support.items() if supported_val]
+                    fc_support_str = ", ".join([f"FC{fc}" for fc in supported_fcs]) if supported_fcs else "[yellow]None[/yellow]"
+                    status_str = "[green]FCs Checked[/green]"
 
-                        live_unit_display_data[unit_id] = ["[green]Checked[/green]", fc_support_str, ""]
-                        unit_data_for_results["fc_scan_status"] = "success"
+                    if supported_fcs:
+                        unit_data_for_results["data_dumps"] = {}
+                        dump_details_parts = []
+                        for fc_to_dump in supported_fcs:
+                            overall_progress.console.print(f"    [dodger_blue1]-> Dumping FC{fc_to_dump} for Unit {unit_id}...[/dodger_blue1]")
+                            # Update status for TUI if we had a live table for units here
+                            # live_unit_display_data[unit_id] = [f"[yellow]Dumping FC{fc_to_dump}...[/yellow]", fc_support_str, details_str]
+                            # (rebuild and update live table)
 
-                        if supported_fcs:
-                            unit_data_for_results["data_dumps"] = {}
-                            for fc_to_dump in supported_fcs:
-                                live_unit_display_data[unit_id][0] = f"[yellow]Dumping FC{fc_to_dump}...[/yellow]"
-                                # Rebuild and update table for dumping status
-                                temp_table_dump_status = Table(title=current_title)
-                                temp_table_dump_status.add_column("Unit ID", style="dim", width=10)
-                                temp_table_dump_status.add_column("Status", width=25)
-                                temp_table_dump_status.add_column("FC Support", width=30)
-                                temp_table_dump_status.add_column("Details", no_wrap=False)
-                                for uid_disp_inner in sorted(live_unit_display_data.keys()):
-                                    status_i, fc_str_i, details_str_i = live_unit_display_data[uid_disp_inner]
-                                    temp_table_dump_status.add_row(str(uid_disp_inner), status_i, fc_str_i, details_str_i)
-                                live.update(temp_table_dump_status)
+                            dump_result = await modbus_scanner.discover_valid_ranges_and_dump(
+                                fc=fc_to_dump,
+                                max_addr=config.get('max_coil_address', 9999) if fc_to_dump in [1,2] else config.get('max_register_address', 9999)
+                            )
+                            unit_data_for_results["data_dumps"][f"fc{fc_to_dump}"] = dump_result
 
-                                dump_result = await modbus_scanner.discover_valid_ranges_and_dump(
-                                    fc=fc_to_dump,
-                                    max_addr=config.get('max_coil_address', 9999) if fc_to_dump in [1,2] else config.get('max_register_address', 9999)
-                                )
-                                unit_data_for_results["data_dumps"][f"fc{fc_to_dump}"] = dump_result
+                            if dump_result["status"] == "success" and dump_result["valid_ranges"]:
+                                num_items = sum(len(r.get("values", [])) for r in dump_result["valid_ranges"])
+                                dump_details_parts.append(f"FC{fc_to_dump}: {num_items} items")
+                            elif dump_result["status"] == "success_no_data":
+                                dump_details_parts.append(f"FC{fc_to_dump}: No data")
+                            else:
+                                dump_details_parts.append(f"FC{fc_to_dump}: {dump_result['status']}")
+                        details_str = "; ".join(dump_details_parts)
+                        status_str = "[green]Data Dumped[/green]"
+                    else:
+                        details_str = "No FCs to dump"
+                        unit_data_for_results["data_dumps"] = "skipped_no_fc_support"
 
-                                if dump_result["status"] == "success" and dump_result["valid_ranges"]:
-                                    num_items = sum(len(r.get("values", [])) for r in dump_result["valid_ranges"])
-                                    details_str += f"FC{fc_to_dump}: Read {num_items} items. "
-                                    live_unit_display_data[unit_id][0] = "[green]Dumped[/green]"
-                                elif dump_result["status"] == "success_no_data":
-                                    details_str += f"FC{fc_to_dump}: No data. "
-                                    live_unit_display_data[unit_id][0] = "[green]Dumped (No Data)[/green]"
-                                else: # errors or other statuses
-                                    details_str += f"FC{fc_to_dump}: {dump_result['status']}. "
-                                    live_unit_display_data[unit_id][0] = "[yellow]Dump Issues[/yellow]"
-                                live_unit_display_data[unit_id][2] = details_str.strip()
-                        else:
-                            logger.info(f"Unit {unit_id} on {ip}: No function codes reported as supported for data dumping.")
-                            live_unit_display_data[unit_id][2] = "No FCs to dump"
-                            unit_data_for_results["data_dumps"] = "skipped_no_fc_support"
+                except Exception as e_scan:
+                    error_msg_short = f"Scan error: {type(e_scan).__name__}"
+                    logger.error(f"Unit {unit_id} on {ip}: {error_msg_short} - {str(e_scan)[:100]}...", exc_info=True)
+                    details_str = f"[dim]{str(e_scan)[:100]}[/dim]"
+                    unit_data_for_results["error"] = str(e_scan)
 
-                    except Exception as e_scan:
-                        error_msg = f"Scan error: {type(e_scan).__name__}"
-                        logger.error(f"Unit {unit_id} on {ip}: {error_msg} - {str(e_scan)[:100]}...", exc_info=True)
-                        live_unit_display_data[unit_id] = ["[red]Error[/red]", fc_support_str, f"[dim]{str(e_scan)[:100]}[/dim]"]
-                        unit_data_for_results["error"] = str(e_scan)
-                        unit_data_for_results["fc_scan_status"] = "error"
+                # Storing for the final summary table for this IP
+                live_unit_display_data[unit_id] = [status_str, fc_support_str, details_str]
+                ip_scan_data["units"].append(unit_data_for_results)
+                # overall_progress.advance(unit_scan_task)
 
-                    ip_scan_data["units"].append(unit_data_for_results)
+            # overall_progress.update(unit_scan_task, visible=False) # Hide after completing units for this IP
 
-                    # Final update for this unit in the live table
-                    temp_table = Table(title=current_title) # Recreate to ensure clean state for Live
-                    temp_table.add_column("Unit ID", style="dim", width=10)
-                    temp_table.add_column("Status", width=25) # Increased width for longer status
-                    temp_table.add_column("FC Support", width=30)
-                    temp_table.add_column("Details", no_wrap=False)
-                    for uid_disp in sorted(live_unit_display_data.keys()):
-                        status, fc_str, details_str_val = live_unit_display_data[uid_disp]
-                        temp_table.add_row(str(uid_disp), status, fc_str, details_str_val)
-                    live.update(temp_table)
-
-                # After all units for this IP are done, print a final static table for this IP
-                # if config.get("verbose", 0) >= 1 or ip_scan_data["units"]: # Show if verbose or if units found/attempted
+            # Print summary table for the current IP
+            if ip_scan_data["units"]: # Only print if there were units processed or attempted
                 overall_progress.console.print(f"\n[bold underline]Summary for IP: {ip}[/bold underline]")
                 final_ip_table = Table(title=f"Final Results for {ip}")
                 final_ip_table.add_column("Unit ID", style="dim", width=10)
-                final_ip_table.add_column("Status", width=25)
+                final_ip_table.add_column("Status", width=20) # Adjusted width
                 final_ip_table.add_column("FC Support", width=30)
-                final_ip_table.add_column("Details", no_wrap=False)
-                for unit_res in ip_scan_data["units"]:
-                    uid = unit_res["unit_id"]
-                    status_val, fc_str_val, details_val = live_unit_display_data.get(uid, ["Unknown", "", "Data missing"])
-                    if "error" in unit_res:
-                        status_val = "[red]Error[/red]"
-                        details_val = f"[dim]{unit_res['error'][:100]}[/dim]"
-                    elif unit_res.get("fc_support"):
-                        supported = [fc for fc, sup in unit_res["fc_support"].items() if sup]
-                        fc_str_val = ", ".join([f"FC{fc}" for fc in supported]) if supported else "None"
-                        status_val = "[green]Checked[/green]"
-                    final_ip_table.add_row(str(uid), status_val, fc_str_val, details_val)
+                final_ip_table.add_column("Details/Dump Summary", no_wrap=False)
+
+                for unit_id_key in sorted(live_unit_display_data.keys()): # Iterate in order
+                    status_val, fc_str_val, details_val = live_unit_display_data[unit_id_key]
+                    # Check if there was a primary error for the unit scan itself
+                    # This requires finding the corresponding entry in ip_scan_data["units"]
+                    unit_entry = next((u for u in ip_scan_data["units"] if u["unit_id"] == unit_id_key), None)
+                    if unit_entry and "error" in unit_entry and unit_entry.get("fc_scan_status") != "success":
+                        status_val = "[red]Scan Error[/red]"
+                        details_val = f"[dim]{unit_entry['error'][:100]}[/dim]"
+
+                    final_ip_table.add_row(str(unit_id_key), status_val, fc_str_val, details_val)
                 overall_progress.console.print(final_ip_table)
 
             await connector.disconnect()
