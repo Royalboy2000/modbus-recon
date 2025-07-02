@@ -87,32 +87,73 @@ async def main_program_logic(config: dict):
         logger.info("Fast scan disabled by user.")
 
 
-    console.rule("[bold blue]Initiating Scan (Conceptual - Core Logic Pending)[/bold blue]")
+    console.rule("[bold blue]Initiating Scan[/bold blue]")
     all_results = []
 
     # --- Actual Scanning Logic ---
-    # --- Actual Scanning Logic ---
     from modbus_scanner.core.connector import ModbusConnector
     from modbus_scanner.core.scanner import ModbusScanner
-    # Removed: from rich.live import Live # No longer using nested Live
-    from rich.table import Table
-    from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn, TimeElapsedColumn, SpinnerColumn
+    from rich.live import Live
+    from rich.table import Table, Column # Added Column
+    from rich.layout import Layout
+    from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn, TimeElapsedColumn
+    from rich.panel import Panel
 
-    overall_progress_columns = [
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+    # Define Layout
+    layout = Layout(name="root")
+    layout.split_column(
+        Layout(name="header", size=1), # Reduced header size
+        Layout(name="main_scan", ratio=1),
+        Layout(name="footer", size=1)
+    )
+    layout["main_scan"].split_row(
+        Layout(name="ip_progress_region", ratio=1),
+        Layout(name="unit_details_region", ratio=2)
+    )
+
+    layout["header"].update(Panel("[bold blue]Modbus Scanner[/bold blue] - Initializing...", expand=True, border_style="dim blue"))
+    layout["footer"].update(Panel("Status: Preparing scan...", expand=True, border_style="dim blue"))
+
+    # Define columns for Progress explicitly for clarity and correct argument passing
+    progress_columns = [
+        TextColumn("[progress.description]{task.description}", table_column=Column(width=35)), # Use Column object
+        BarColumn(bar_width=None),
+        TextColumn("[progress.percentage]{task.percentage:>3.1f}%"), # Show one decimal for percentage
         TimeRemainingColumn(),
-        TimeElapsedColumn(),
+        TimeElapsedColumn(), # Added for more info
     ]
+    overall_progress_display = Progress(
+        *progress_columns,
+        console=console,
+        transient=False
+    )
+    ip_scan_task = overall_progress_display.add_task("[cyan]Overall Progress[/cyan]", total=len(ip_targets))
+    layout["main_scan"]["ip_progress_region"].update(Panel(overall_progress_display, title="[b]Scan Progress[/b]", border_style="green", padding=(1,1)))
 
-    with Progress(*overall_progress_columns, console=console, transient=False) as overall_progress:
-        ip_scan_task = overall_progress.add_task("[cyan]Scanning IPs...", total=len(ip_targets))
+    initial_unit_panel_content = Table(title="Waiting for IP scan...")
+    initial_unit_panel_content.add_column("Info")
+    initial_unit_panel_content.add_row("Select target and start scan.")
+    layout["main_scan"]["unit_details_region"].update(Panel(initial_unit_panel_content, title="[b]Unit Details[/b]", border_style="blue"))
+
+
+    with Live(layout, console=console, refresh_per_second=10, screen=False, transient=False) as live:
+        layout["footer"].update(Panel("Status: Scanning IPs...", expand=True, border_style="yellow"))
 
         for ip_index, ip in enumerate(ip_targets):
-            overall_progress.update(ip_scan_task, description=f"[cyan]Scanning IP: {ip} ({ip_index+1}/{len(ip_targets)})")
+            layout["header"].update(Panel(f"[bold blue]Modbus Scanner[/bold blue] - Current Target: [cyan]{ip}[/cyan] ({ip_index+1}/{len(ip_targets)})", expand=True, border_style="blue"))
+            overall_progress_display.update(ip_scan_task, description=f"Scanning: {ip}")
+            # No need to update layout[\"main_scan\"][\"ip_progress_region\"] directly if overall_progress_display object itself is updated and part of layout
 
             ip_scan_data = {"ip": ip, "port": config.get('port'), "units": []}
+
+            current_ip_unit_rows_data = {}
+            unit_display_table = Table(title=f"Units for {ip}")
+            unit_display_table.add_column("ID", style="dim", width=5)
+            unit_display_table.add_column("Status", width=18)
+            unit_display_table.add_column("FCs Supported", width=28)
+            unit_display_table.add_column("Dump Summary / Error", no_wrap=False)
+            layout["main_scan"]["unit_details_region"].update(Panel(unit_display_table, title=f"[b]Unit Scan: {ip}[/b]", border_style="blue"))
+            live.refresh()
 
             connector = ModbusConnector(
                 host=ip,
@@ -123,126 +164,115 @@ async def main_program_logic(config: dict):
             if not await connector.connect():
                 message = f"Failed to connect to {ip}:{config.get('port')}"
                 logger.warning(message)
-                # No need to console.print here if Live is active, but Live is per-IP.
-                # So, if connection fails before Live starts for units, print is okay.
-                overall_progress.console.print(f"[yellow]  - {message}[/yellow]")
+                layout["main_scan"]["unit_details_region"].update(Panel(f"[bold red]Connection Failed[/bold red]\n{message}", title=f"Error: {ip}", border_style="red"))
                 ip_scan_data["status"] = "connection_failed"
                 all_results.append(ip_scan_data)
-                overall_progress.advance(ip_scan_task)
+                overall_progress_display.advance(ip_scan_task)
+                # layout["main_scan"]["ip_progress_region"].update(overall_progress_display) # Already part of live, auto-refreshes
+                await asyncio.sleep(0.2)
                 continue
 
             logger.info(f"Successfully connected to {ip}:{config.get('port')}")
             ip_scan_data["status"] = "connected"
 
-            # Data structure to hold unit scan information for the live table
-            # Dict: {unit_id: [status_str, fc_support_str, details_str]}
-            live_unit_display_data = {}  # Stores display strings for units of the current IP
-
-            # unit_scan_task = overall_progress.add_task(f"  Units for {ip}", total=len(unit_ids_to_scan), visible=False) # Add but keep invisible initially
-
             for unit_idx, unit_id in enumerate(unit_ids_to_scan):
-                # overall_progress.update(unit_scan_task, advance=0, description=f"  Scanning Unit ID: {unit_id} for {ip} ({unit_idx+1}/{len(unit_ids_to_scan)})", visible=True)
-                overall_progress.console.print(f"  [steel_blue]-> Probing Unit ID: {unit_id} on {ip} ({unit_idx+1}/{len(unit_ids_to_scan)})[/steel_blue]")
+                unit_id_str = str(unit_id)
+                current_ip_unit_rows_data[unit_id] = [unit_id_str, "[cyan]Probing FCs...[/cyan]", "", ""]
+
+                temp_unit_table = Table(title=f"Units for {ip} (Unit {unit_id_str} - {unit_idx+1}/{len(unit_ids_to_scan)})")
+                temp_unit_table.add_column("ID", style="dim", width=5); temp_unit_table.add_column("Status", width=18)
+                temp_unit_table.add_column("FCs Supported", width=28); temp_unit_table.add_column("Dump Summary / Error", no_wrap=False)
+                for uid_key in sorted(current_ip_unit_rows_data.keys()):
+                    temp_unit_table.add_row(*current_ip_unit_rows_data[uid_key])
+                layout["main_scan"]["unit_details_region"].update(Panel(temp_unit_table, title=f"[b]Unit Scan: {ip}[/b]", border_style="blue"))
+                await asyncio.sleep(0.02)
 
                 unit_data_for_results = {"unit_id": unit_id}
-                fc_support_str = "[red]N/A[/red]"
-                details_str = ""
-                status_str = "[red]Error[/red]"
-
+                fc_support_str_val = "[red]N/A[/red]"
+                details_str_val = ""
+                status_str_val = "[red]Error[/red]"
 
                 try:
                     client = connector.get_client()
                     if not client:
-                        error_msg = "Client not available from connector."
+                        error_msg = "Client unavailable"
                         logger.error(f"Unit {unit_id} on {ip}: {error_msg}")
-                        details_str = error_msg
+                        status_str_val, details_str_val = "[red]Client Err[/red]", error_msg
                         unit_data_for_results["error"] = error_msg
-                        ip_scan_data["units"].append(unit_data_for_results)
-                        # overall_progress.advance(unit_scan_task)
-                        continue
-
-                    modbus_scanner = ModbusScanner(client=client, unit_id=unit_id)
-
-                    # Check Function Code Support
-                    fc_support = await modbus_scanner.check_function_code_support()
-                    unit_data_for_results["fc_support"] = fc_support
-
-                    supported_fcs = [fc for fc, supported_val in fc_support.items() if supported_val]
-                    fc_support_str = ", ".join([f"FC{fc}" for fc in supported_fcs]) if supported_fcs else "[yellow]None[/yellow]"
-                    status_str = "[green]FCs Checked[/green]"
-
-                    if supported_fcs:
-                        unit_data_for_results["data_dumps"] = {}
-                        dump_details_parts = []
-                        for fc_to_dump in supported_fcs:
-                            overall_progress.console.print(f"    [dodger_blue1]-> Dumping FC{fc_to_dump} for Unit {unit_id}...[/dodger_blue1]")
-                            # Update status for TUI if we had a live table for units here
-                            # live_unit_display_data[unit_id] = [f"[yellow]Dumping FC{fc_to_dump}...[/yellow]", fc_support_str, details_str]
-                            # (rebuild and update live table)
-
-                            dump_result = await modbus_scanner.discover_valid_ranges_and_dump(
-                                fc=fc_to_dump,
-                                max_addr=config.get('max_coil_address', 9999) if fc_to_dump in [1,2] else config.get('max_register_address', 9999)
-                            )
-                            unit_data_for_results["data_dumps"][f"fc{fc_to_dump}"] = dump_result
-
-                            if dump_result["status"] == "success" and dump_result["valid_ranges"]:
-                                num_items = sum(len(r.get("values", [])) for r in dump_result["valid_ranges"])
-                                dump_details_parts.append(f"FC{fc_to_dump}: {num_items} items")
-                            elif dump_result["status"] == "success_no_data":
-                                dump_details_parts.append(f"FC{fc_to_dump}: No data")
-                            else:
-                                dump_details_parts.append(f"FC{fc_to_dump}: {dump_result['status']}")
-                        details_str = "; ".join(dump_details_parts)
-                        status_str = "[green]Data Dumped[/green]"
                     else:
-                        details_str = "No FCs to dump"
-                        unit_data_for_results["data_dumps"] = "skipped_no_fc_support"
+                        modbus_scanner = ModbusScanner(client=client, unit_id=unit_id)
+                        fc_support = await modbus_scanner.check_function_code_support()
+                        unit_data_for_results["fc_support"] = fc_support
+                        supported_fcs = [fc for fc, sup_val in fc_support.items() if sup_val]
+                        fc_support_str_val = ", ".join([f"FC{fc}" for fc in supported_fcs]) if supported_fcs else "[yellow]None[/yellow]"
+                        status_str_val = "[green]FCs Checked[/green]"
+
+                        if supported_fcs:
+                            unit_data_for_results["data_dumps"] = {}
+                            dump_details_parts = []
+                            status_str_val = "[yellow]Dumping...[/yellow]"
+                            current_ip_unit_rows_data[unit_id] = [unit_id_str, status_str_val, fc_support_str_val, ""]
+
+                            _dumping_table = Table(title=f"Units for {ip} (Dumping {unit_id_str} - {unit_idx+1}/{len(unit_ids_to_scan)})")
+                            _dumping_table.add_column("ID", style="dim", width=5); _dumping_table.add_column("Status", width=18)
+                            _dumping_table.add_column("FCs Supported", width=28); _dumping_table.add_column("Dump Summary / Error", no_wrap=False)
+                            for _uid_k in sorted(current_ip_unit_rows_data.keys()): _dumping_table.add_row(*current_ip_unit_rows_data[_uid_k])
+                            layout["main_scan"]["unit_details_region"].update(Panel(_dumping_table, title=f"[b]Unit Scan: {ip}[/b]", border_style="blue"))
+                            await asyncio.sleep(0.02)
+
+                            for fc_to_dump in supported_fcs:
+                                dump_result = await modbus_scanner.discover_valid_ranges_and_dump(
+                                    fc=fc_to_dump,
+                                    max_addr=config.get('max_coil_address', 9999) if fc_to_dump in [1,2] else config.get('max_register_address', 9999)
+                                )
+                                unit_data_for_results["data_dumps"][f"fc{fc_to_dump}"] = dump_result
+                                if dump_result["status"] == "success" and dump_result["valid_ranges"]:
+                                    num_items = sum(len(r.get("values", [])) for r in dump_result["valid_ranges"])
+                                    dump_details_parts.append(f"FC{fc_to_dump}:{num_items}")
+                                elif dump_result["status"] == "success_no_data":
+                                    dump_details_parts.append(f"FC{fc_to_dump}:NoData")
+                                else:
+                                    dump_details_parts.append(f"FC{fc_to_dump}:{dump_result['status'][:5]}")
+                            details_str_val = "; ".join(dump_details_parts)
+                            status_str_val = "[green]Dumped[/green]" if dump_details_parts else "[yellow]Dumped (N/A)[/yellow]"
+                        else:
+                            details_str_val = "No FCs to dump"
+                            unit_data_for_results["data_dumps"] = "skipped_no_fc_support"
 
                 except Exception as e_scan:
-                    error_msg_short = f"Scan error: {type(e_scan).__name__}"
+                    error_msg_short = f"ERR: {type(e_scan).__name__}"
                     logger.error(f"Unit {unit_id} on {ip}: {error_msg_short} - {str(e_scan)[:100]}...", exc_info=True)
-                    details_str = f"[dim]{str(e_scan)[:100]}[/dim]"
+                    details_str_val = f"[dim]{str(e_scan)[:50]}[/dim]"
                     unit_data_for_results["error"] = str(e_scan)
 
-                # Storing for the final summary table for this IP
-                live_unit_display_data[unit_id] = [status_str, fc_support_str, details_str]
+                current_ip_unit_rows_data[unit_id] = [unit_id_str, status_str_val, fc_support_str_val, details_str_val]
                 ip_scan_data["units"].append(unit_data_for_results)
-                # overall_progress.advance(unit_scan_task)
 
-            # overall_progress.update(unit_scan_task, visible=False) # Hide after completing units for this IP
+                final_unit_table = Table(title=f"Units for {ip} (Processed Unit {unit_id_str} - {unit_idx+1}/{len(unit_ids_to_scan)})")
+                final_unit_table.add_column("ID", style="dim", width=5); final_unit_table.add_column("Status", width=18)
+                final_unit_table.add_column("FCs Supported", width=28); final_unit_table.add_column("Dump Summary / Error", no_wrap=False)
+                for uid_key_final in sorted(current_ip_unit_rows_data.keys()):
+                    final_unit_table.add_row(*current_ip_unit_rows_data[uid_key_final])
+                layout["main_scan"]["unit_details_region"].update(Panel(final_unit_table, title=f"[b]Unit Scan: {ip}[/b]", border_style="blue"))
 
-            # Print summary table for the current IP
-            if ip_scan_data["units"]: # Only print if there were units processed or attempted
-                overall_progress.console.print(f"\n[bold underline]Summary for IP: {ip}[/bold underline]")
-                final_ip_table = Table(title=f"Final Results for {ip}")
-                final_ip_table.add_column("Unit ID", style="dim", width=10)
-                final_ip_table.add_column("Status", width=20) # Adjusted width
-                final_ip_table.add_column("FC Support", width=30)
-                final_ip_table.add_column("Details/Dump Summary", no_wrap=False)
-
-                for unit_id_key in sorted(live_unit_display_data.keys()): # Iterate in order
-                    status_val, fc_str_val, details_val = live_unit_display_data[unit_id_key]
-                    # Check if there was a primary error for the unit scan itself
-                    # This requires finding the corresponding entry in ip_scan_data["units"]
-                    unit_entry = next((u for u in ip_scan_data["units"] if u["unit_id"] == unit_id_key), None)
-                    if unit_entry and "error" in unit_entry and unit_entry.get("fc_scan_status") != "success":
-                        status_val = "[red]Scan Error[/red]"
-                        details_val = f"[dim]{unit_entry['error'][:100]}[/dim]"
-
-                    final_ip_table.add_row(str(unit_id_key), status_val, fc_str_val, details_val)
-                overall_progress.console.print(final_ip_table)
-
+            layout["main_scan"]["unit_details_region"].update(Panel(f"Finished scanning units for [cyan]{ip}[/cyan].\n"
+                                                     f"{len(ip_scan_data['units'])} units processed. Results stored.",
+                                                     title=f"IP {ip} Scan Summary", border_style="green"))
             await connector.disconnect()
             all_results.append(ip_scan_data)
-            overall_progress.advance(ip_scan_task)
+            overall_progress_display.advance(ip_scan_task)
+            # layout["main_scan"]["ip_progress_region"].update(overall_progress_display) # Progress bar updates itself
+            if ip_index < len(ip_targets) - 1:
+                await asyncio.sleep(0.5)
 
-    console.rule("[bold red]Scan Complete[/bold red]")
-    logger.info("Modbus Scan Main Loop Finished.")
-    if all_results:
-        console.print("\n[bold green]Collected Results (Summary - Placeholder):[/bold green]")
-        from rich.pretty import pprint
-        pprint(all_results)
+        layout["footer"].update(Panel("[bold green]Status: Scan Complete![/bold green]", expand=True, border_style="green"))
+        layout["header"].update(Panel("[bold blue]Modbus Scanner[/bold blue] - Scan Finished", expand=True, border_style="dim blue"))
+
+    console.rule("[bold red]Overall Scan Complete[/bold red]")
+    logger.info("Modbus Scan Main Loop Finished.") # Corrected indentation
+    if all_results: # Corrected indentation
+        from rich.pretty import pprint # Corrected indentation
+        pprint(all_results) # Corrected indentation
 
 
 def main():
