@@ -269,10 +269,36 @@ async def main_program_logic(config: dict):
         layout["header"].update(Panel("[bold blue]Modbus Scanner[/bold blue] - Scan Finished", expand=True, border_style="dim blue"))
 
     console.rule("[bold red]Overall Scan Complete[/bold red]")
-    logger.info("Modbus Scan Main Loop Finished.") # Corrected indentation
-    if all_results: # Corrected indentation
-        from rich.pretty import pprint # Corrected indentation
-        pprint(all_results) # Corrected indentation
+    logger.info("Modbus Scan Main Loop Finished.")
+
+    if all_results:
+        logger.info("Attempting to write output files...")
+        output_prefix = config.get("output_prefix", "scan_results")
+        json_filename = f"{output_prefix}.json"
+        csv_filename = f"{output_prefix}_summary.csv"
+
+        from modbus_scanner.output import writers # Import here to avoid circular if utils also import from output
+
+        if writers.write_json_output(all_results, json_filename):
+            console.print(f"JSON results saved to [bold green]{json_filename}[/bold green]")
+        else:
+            console.print(f"[bold red]Failed to save JSON results to {json_filename}[/bold red]")
+
+        if writers.write_summary_csv_output(all_results, csv_filename):
+            console.print(f"CSV summary saved to [bold green]{csv_filename}[/bold green]")
+        else:
+            console.print(f"[bold red]Failed to save CSV summary to {csv_filename}[/bold red]")
+
+        # Optional: Pretty print to console if not too large or if verbose
+        # if len(str(all_results)) < 3000: # Arbitrary limit to avoid flooding console
+        #    console.print("\n[bold green]Collected Results (Full Data):[/bold green]")
+        #    from rich.pretty import pprint
+        #    pprint(all_results)
+        # else:
+        #    console.print("\n[bold green]Collected Results (Full Data written to files).[/bold green]")
+
+    else:
+        logger.info("No results collected to write.")
 
 
 def main():

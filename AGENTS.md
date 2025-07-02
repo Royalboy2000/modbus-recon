@@ -88,11 +88,18 @@ To create a professional-grade Modbus TCP reconnaissance and enumeration script 
     *   Verbosity levels (`-v`, `-vv`, `-vvv`) control the log levels for both `modbus_scanner_app` and the `pymodbus` library logger.
     *   `RichHandler` is used for console logging.
 
+### Recently Added Modules & Workflow (Continued)
+*   **`modbus_scanner/output/writers.py`**:
+    *   `write_json_output(results: list, filename: str)`: Saves the complete scan results (the `all_results` list of dictionaries) to a JSON file with pretty printing.
+    *   `write_summary_csv_output(results: list, filename: str)`: Saves a summary of the scan to a CSV file. Each row typically represents a scanned unit, including its IP, port, unit ID, scan status, a summary of supported Function Codes, a brief data dump summary, and any specific error encountered for that unit.
+    *   These functions are called at the end of `main_program_logic` in `main.py`.
+
 ### Next Steps (High-Level)
 
-1.  **Enhance `ModbusScanner.py`**: Implement `discover_valid_ranges_and_dump` for FC1-4, including more robust adaptive scanning logic.
-2.  **Output Writers**: Implement functions in `output/writers.py` for JSON and CSV output.
-3.  **TUI Enhancements**: Use `rich.Table` for better result display.
-4.  **Fingerprinting**: Add basic device fingerprinting capabilities.
+1.  **Enhance `ModbusScanner.py`**: Fully implement `discover_valid_ranges_and_dump` for FC1-4 with robust adaptive scanning logic to accurately identify readable memory blocks.
+2.  **Data Parsing & Interpretation**: Add capabilities to parse raw register data into common types (strings, different number formats, handle endianness).
+3.  **Fingerprinting**: Implement device identification using FC43 and common vendor-specific registers.
+4.  **TUI Enhancements**: Further refine the `Layout`-based TUI for clarity and to display more detailed information as it becomes available from enhanced scanning.
+5.  **Detailed CSV Output**: Consider options for more detailed CSV outputs for dumped register/coil data if the summary CSV is insufficient.
 
 Good luck! I'm looking forward to seeing this tool develop.Tool output for `create_file_with_block`:
