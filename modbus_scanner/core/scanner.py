@@ -179,74 +179,110 @@ class ModbusScanner:
             "errors": [] # List of {'address': X, 'type': 'error_type', 'message': '...'}
         }
 
-        # Basic placeholder logic: Try to read a small number of registers/coils at address 0
-        # This will be significantly expanded with adaptive logic in the next step.
-        test_address = 0
-        test_count = 0
+        current_address = 0
         is_coil_type = fc in [FC_READ_COILS, FC_READ_DISCRETE_INPUTS]
+        max_initial_read_count = MAX_READ_COUNT_COILS if is_coil_type else MAX_READ_COUNT_REGISTERS
 
-        if is_coil_type:
-            test_count = min(16, MAX_READ_COUNT_COILS) # Read a few coils
-        else:
-            test_count = min(5, MAX_READ_COUNT_REGISTERS) # Read a few registers
+        successful_reads = 0
+        errors_encountered = 0
 
-        if test_address + test_count -1 > max_addr : # Ensure test read is within max_addr
-             if max_addr < test_address:
-                 logger.info(f"Unit {self.unit_id}: FC{fc} - Max address {max_addr} is less than test start address {test_address}. Skipping dump.")
-                 scan_result["status"] = "skipped_max_addr"
-                 return scan_result
-             test_count = max_addr - test_address + 1
+        while current_address <= max_addr:
+            current_read_count = max_initial_read_count
+
+            # This inner loop is for adaptive retry with smaller counts
+            while True:
+                count_to_attempt = min(current_read_count, max_addr - current_address + 1)
+                if count_to_attempt <= 0:
+                    break # Break inner retry loop, will also break outer due to current_address condition
+
+                response = await self._execute_read_request(fc, current_address, count_to_attempt)
+
+                if response is None: # Timeout or communication error
+                    msg = f"No response/timeout for FC{fc} at {current_address}, count {count_to_attempt}"
+                    logger.warning(f"Unit {self.unit_id}: {msg}")
+                    scan_result["errors"].append({"address": current_address, "type": "timeout_or_comms_error", "message": msg, "count_attempted": count_to_attempt})
+                    errors_encountered +=1
+                    current_address += count_to_attempt # Skip this block
+                    break # Break inner retry loop
+
+                if response.isError():
+                    if isinstance(response, ExceptionResponse):
+                        exc_code = response.exception_code
+                        error_msg = f"Modbus Exception FC{fc} @ {current_address}, Code: {exc_code}"
+                        scan_result["errors"].append({"address": current_address, "type": "modbus_exception", "code": exc_code, "message": error_msg, "count_attempted": count_to_attempt})
+                        errors_encountered +=1
+
+                        if exc_code == 2: # Illegal Data Address
+                            if current_read_count > 1:
+                                current_read_count = max(1, current_read_count // 2) # Halve read count and retry
+                                logger.debug(f"Unit {self.unit_id}: FC{fc} - Illegal Data Address at {current_address}. Reducing read count to {current_read_count} and retrying.")
+                                continue # Retry same address with smaller count (inner loop)
+                            else: # Already trying with count 1
+                                current_address += 1 # Move to next single address
+                                break # Break inner retry loop
+                        elif exc_code == 1: # Illegal Function
+                            logger.warning(f"Unit {self.unit_id}: {error_msg}. Stopping scan for this FC.")
+                            scan_result["status"] = "failed_illegal_function"
+                            return scan_result # Abort this FC scan entirely
+                        else: # Other Modbus errors
+                            logger.warning(f"Unit {self.unit_id}: {error_msg}. Skipping block of size {count_to_attempt}.")
+                            current_address += count_to_attempt
+                            break # Break inner retry loop
+                    else: # Generic Pymodbus error object
+                        error_msg = f"Generic Modbus Error for FC{fc} @ {current_address}: {str(response)}"
+                        logger.warning(f"Unit {self.unit_id}: {error_msg}")
+                        scan_result["errors"].append({"address": current_address, "type": "generic_modbus_error", "message": error_msg, "count_attempted": count_to_attempt})
+                        errors_encountered +=1
+                        current_address += count_to_attempt # Skip block
+                        break # Break inner retry loop
+                else: # Successful read
+                    data_values = response.bits if is_coil_type else response.registers
+                    # response.bits might be longer than count_to_attempt due to byte packing, slice it.
+                    # response.registers should match count_to_attempt.
+                    actual_items_read = min(len(data_values), count_to_attempt)
+
+                    if actual_items_read > 0:
+                        valid_data_segment = data_values[:actual_items_read]
+                        scan_result["valid_ranges"].append({
+                            "start_address": current_address,
+                            "count": actual_items_read,
+                            "values": valid_data_segment
+                        })
+                        successful_reads += 1
+                        logger.info(f"Unit {self.unit_id}: FC{fc} @ {current_address}-{current_address + actual_items_read - 1} -> Read {actual_items_read} items.")
+                    else: # Read 0 items successfully (e.g. device returned empty list for valid request)
+                        logger.info(f"Unit {self.unit_id}: FC{fc} @ {current_address} - Read successful but 0 items returned by device for count {count_to_attempt}.")
+                        # Consider if this should be an error or a specific status
+                        scan_result["errors"].append({
+                            "address": current_address,
+                            "type": "success_read_zero_items",
+                            "message": f"Successfully read 0 items for FC{fc} at {current_address} count {count_to_attempt}",
+                            "count_attempted": count_to_attempt
+                        })
 
 
-        if test_count <= 0:
-            logger.info(f"Unit {self.unit_id}: FC{fc} - No addresses to scan up to max_addr {max_addr} from start {test_address}. Skipping dump.")
-            scan_result["status"] = "skipped_no_range"
-            return scan_result
+                    current_address += actual_items_read
+                    break # Break inner retry loop (successfully processed this block)
 
-        response = await self._execute_read_request(fc, test_address, test_count)
+            if count_to_attempt <= 0: # Condition to exit outer while loop if max_addr is reached
+                break
 
-        if response is None:
-            error_detail = {"address": test_address, "type": "timeout_or_comms_error", "message": f"No response for FC{fc} at {test_address} count {test_count}"}
-            scan_result["errors"].append(error_detail)
+        if successful_reads > 0 and errors_encountered > 0:
+            scan_result["status"] = "partial_success"
+        elif successful_reads > 0:
+            scan_result["status"] = "success"
+        elif errors_encountered > 0:
             scan_result["status"] = "failed"
-            logger.warning(f"Unit {self.unit_id}: FC{fc} @ {test_address} - {error_detail['message']}")
-        elif response.isError():
-            error_type = "modbus_exception"
-            error_code = getattr(response, 'exception_code', 'N/A')
-            if isinstance(response, ExceptionResponse):
-                 error_message = f"Modbus Exception Code: {response.exception_code}"
-            else:
-                 error_message = str(response)
+        else: # No reads, no errors (e.g., max_addr was 0 or negative)
+            scan_result["status"] = "no_operation"
 
-            error_detail = {"address": test_address, "type": error_type, "code": error_code, "message": error_message}
-            scan_result["errors"].append(error_detail)
-            scan_result["status"] = "failed_exception"
-            logger.warning(f"Unit {self.unit_id}: FC{fc} @ {test_address} - {error_message} (Code: {error_code})")
-        else:
-            # Successful read (for this basic test)
-            data_values = []
-            if is_coil_type:
-                data_values = response.bits[:test_count]
-            else: # Register type
-                data_values = response.registers[:test_count]
 
-            if data_values:
-                scan_result["valid_ranges"].append({
-                    "start_address": test_address,
-                    "count": len(data_values), # Actual number of items read and returned
-                    "values": data_values
-                })
-                scan_result["status"] = "success" # Or "partial_success" if adaptive scanning was incomplete
-                logger.info(f"Unit {self.unit_id}: FC{fc} @ {test_address} - Successfully read {len(data_values)} items.")
-            else:
-                scan_result["status"] = "success_no_data" # Valid response but no data (e.g. read 0 items successfully)
-                logger.info(f"Unit {self.unit_id}: FC{fc} @ {test_address} - Read successful but no data returned in response list.")
-
-        logger.info(f"Unit {self.unit_id}: Finished data discovery for FC{fc}. Status: {scan_result['status']}")
+        logger.info(f"Unit {self.unit_id}: Finished data discovery for FC{fc}. Status: {scan_result['status']}. Ranges found: {len(scan_result['valid_ranges'])}. Errors: {len(scan_result['errors'])}.")
         return scan_result
 
-
-# Example Usage (for testing this module)
+# The main_test_scanner() function and its call are removed to prevent syntax errors
+# during import, as this file is not intended to be run directly anymore.
+# For module-specific tests, use the unittest framework in the tests/ directory.
 # The main_test_scanner() function and its call are removed to prevent syntax errors
 # during import, as this file is not intended to be run directly anymore.
 # For module-specific tests, use the unittest framework in the tests/ directory.

@@ -87,7 +87,7 @@ async def main_program_logic(config: dict):
         logger.info("Fast scan disabled by user.")
 
 
-    console.rule("[bold blue]Initiating Scan[/bold blue]")
+    # console.rule("[bold blue]Initiating Scan[/bold blue]") # Replaced by Layout
     all_results = []
 
     # --- Actual Scanning Logic ---
@@ -318,6 +318,20 @@ def main():
         action=argparse.BooleanOptionalAction,
         default=None,
         help="Perform a faster, less comprehensive scan. Use --no-fast-scan to disable if enabled in config."
+    )
+    parser.add_argument(
+        "--max-register-address",
+        type=int,
+        default=None,
+        metavar="ADDR",
+        help="Highest register address (FC3, FC4) to scan. Overrides config. (Default: from config or 9999)"
+    )
+    parser.add_argument(
+        "--max-coil-address",
+        type=int,
+        default=None,
+        metavar="ADDR",
+        help="Highest coil/discrete input address (FC1, FC2) to scan. Overrides config. (Default: from config or 9999)"
     )
 
     # Configuration File Argument
