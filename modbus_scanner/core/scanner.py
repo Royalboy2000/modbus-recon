@@ -68,14 +68,15 @@ class ModbusScanner:
         response = None
         try:
             logger.debug(f"Unit {self.unit_id}: Reading FC{fc} @ Address {address}, Count {count}")
+            # address is positional, count and slave are keywords
             if fc == FC_READ_COILS:
-                response = await self.client.read_coils(address, count, slave=self.unit_id)
+                response = await self.client.read_coils(address, count=count, slave=self.unit_id)
             elif fc == FC_READ_DISCRETE_INPUTS:
-                response = await self.client.read_discrete_inputs(address, count, slave=self.unit_id)
+                response = await self.client.read_discrete_inputs(address, count=count, slave=self.unit_id)
             elif fc == FC_READ_HOLDING_REGISTERS:
-                response = await self.client.read_holding_registers(address, count, slave=self.unit_id)
+                response = await self.client.read_holding_registers(address, count=count, slave=self.unit_id)
             elif fc == FC_READ_INPUT_REGISTERS:
-                response = await self.client.read_input_registers(address, count, slave=self.unit_id)
+                response = await self.client.read_input_registers(address, count=count, slave=self.unit_id)
             else:
                 logger.warning(f"Unit {self.unit_id}: Unsupported function code {fc} requested in _execute_read_request.")
                 return None
