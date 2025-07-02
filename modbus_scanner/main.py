@@ -255,6 +255,12 @@ async def main_program_logic(config: dict):
                     final_unit_table.add_row(*current_ip_unit_rows_data[uid_key_final])
                 layout["main_scan"]["unit_details_region"].update(Panel(final_unit_table, title=f"[b]Unit Scan: {ip}[/b]", border_style="blue"))
 
+                # Implement request delay between units for the same IP
+                request_delay_s = float(config.get('request_delay', 0.05))
+                if request_delay_s > 0 and unit_idx < len(unit_ids_to_scan) - 1: # Don't sleep after the last unit
+                    logger.debug(f"Delaying for {request_delay_s}s before next unit...")
+                    await asyncio.sleep(request_delay_s)
+
             layout["main_scan"]["unit_details_region"].update(Panel(f"Finished scanning units for [cyan]{ip}[/cyan].\n"
                                                      f"{len(ip_scan_data['units'])} units processed. Results stored.",
                                                      title=f"IP {ip} Scan Summary", border_style="green"))
@@ -344,6 +350,13 @@ def main():
         action=argparse.BooleanOptionalAction,
         default=None,
         help="Perform a faster, less comprehensive scan. Use --no-fast-scan to disable if enabled in config."
+    )
+    parser.add_argument(
+        "--request-delay",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="Delay between requests to the same host (especially between unit IDs). Overrides config. (Default: from config or 0.05)"
     )
     parser.add_argument(
         "--max-register-address",

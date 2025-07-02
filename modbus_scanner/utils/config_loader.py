@@ -16,7 +16,7 @@ DEFAULT_CONFIG_VALUES = {
     "fast_scan": False,
     "max_register_address": 9999,
     "max_coil_address": 9999,
-    "request_delay": 0.0,
+    "request_delay": 0.05, # Default delay of 50ms
     # Add other defaults as the tool evolves
 }
 

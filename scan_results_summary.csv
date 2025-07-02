@@ -1,0 +1,2 @@
+IP Address,Port,Unit ID,Scan Status,FC1 Read Coils,FC2 Read Discrete Inputs,FC3 Read Holding Registers,FC4 Read Input Registers,Data Dump Summary,Error Info
+127.0.0.1,502,N/A,Connection Failed,N/A,N/A,N/A,N/A,N/A,Connection to host failed
