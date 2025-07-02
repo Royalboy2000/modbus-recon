@@ -164,90 +164,92 @@ class ModbusScanner:
         This is a very basic placeholder. Real adaptive scanning will be more complex.
 
         :param fc: Function code to scan.
-        :param max_addr: Maximum address to check.
-        :return: Dictionary with results.
+        :param max_addr: Maximum address to check (inclusive).
+        :return: Dictionary with results, including 'fc', 'unit_id', 'status', 'valid_ranges', and 'errors'.
+                 'valid_ranges' is a list of dicts: {'start_address': X, 'count': Y, 'values': [...]}.
+                 'errors' is a list of dicts: {'address': X, 'type': 'error_type', 'message': '...'}.
         """
-        logger.info(f"Unit {self.unit_id}: Starting adaptive scan for FC{fc} up to address {max_addr}")
-        results = {"fc": fc, "unit_id": self.unit_id, "data": [], "errors": []}
+        logger.info(f"Unit {self.unit_id}: Starting data discovery for FC{fc} up to address {max_addr}")
+        # Define the structure for results
+        scan_result = {
+            "fc": fc,
+            "unit_id": self.unit_id,
+            "status": "pending", # pending, success, partial_success, failed
+            "valid_ranges": [], # List of {'start_address': X, 'values': [...]}
+            "errors": [] # List of {'address': X, 'type': 'error_type', 'message': '...'}
+        }
 
-        # Simplified scanning logic for now
-        # A real implementation would be more adaptive, adjusting count and handling exceptions
-        read_count = MAX_READ_COUNT_COILS if fc in [FC_READ_COILS, FC_READ_DISCRETE_INPUTS] else MAX_READ_COUNT_REGISTERS
+        # Basic placeholder logic: Try to read a small number of registers/coils at address 0
+        # This will be significantly expanded with adaptive logic in the next step.
+        test_address = 0
+        test_count = 0
+        is_coil_type = fc in [FC_READ_COILS, FC_READ_DISCRETE_INPUTS]
 
-        current_address = 0
-        while current_address <= max_addr:
-            response = await self._execute_read_request(fc, current_address, read_count)
-            if response is None: # Timeout or major error
-                logger.warning(f"Unit {self.unit_id}: Assuming end of readable range for FC{fc} at {current_address} due to timeout/error.")
-                results["errors"].append({"address": current_address, "type": "timeout/comms_error"})
-                break
+        if is_coil_type:
+            test_count = min(16, MAX_READ_COUNT_COILS) # Read a few coils
+        else:
+            test_count = min(5, MAX_READ_COUNT_REGISTERS) # Read a few registers
 
-            if response.isError():
-                if isinstance(response, ExceptionResponse):
-                    if response.exception_code == 2: # Illegal Data Address
-                        logger.info(f"Unit {self.unit_id}: FC{fc} - Illegal Data Address at {current_address}. Trying smaller chunks or stopping block.")
-                        # This is where adaptive logic would shrink read_count or step back.
-                        # For now, we just stop this block.
-                        # A more advanced scanner might try reading single registers to find sparse data.
-                        if read_count == 1: # Was already trying smallest chunk
-                             results["errors"].append({"address": current_address, "type": "illegal_data_address", "code": response.exception_code})
-                             current_address += 1 # Try next single address
-                             continue
-                        else: # Try reducing read_count
-                            read_count = max(1, read_count // 2) # Halve the count, ensure at least 1
-                            logger.debug(f"Unit {self.unit_id}: FC{fc} - Reduced read count to {read_count} for address {current_address}")
-                            # Don't increment current_address, retry with smaller count
-                            continue
+        if test_address + test_count -1 > max_addr : # Ensure test read is within max_addr
+             if max_addr < test_address:
+                 logger.info(f"Unit {self.unit_id}: FC{fc} - Max address {max_addr} is less than test start address {test_address}. Skipping dump.")
+                 scan_result["status"] = "skipped_max_addr"
+                 return scan_result
+             test_count = max_addr - test_address + 1
 
 
-                    elif response.exception_code == 1: # Illegal Function
-                        logger.warning(f"Unit {self.unit_id}: FC{fc} - Illegal Function at {current_address}. Stopping scan for this FC.")
-                        results["errors"].append({"address": current_address, "type": "illegal_function", "code": response.exception_code})
-                        return results # Stop scan for this FC
-                    else:
-                        logger.warning(f"Unit {self.unit_id}: FC{fc} - Modbus Exception {response.exception_code} at {current_address}. Skipping block.")
-                        results["errors"].append({"address": current_address, "type": "modbus_exception", "code": response.exception_code})
-                        # Potentially skip this block or try smaller reads
-                else:
-                    logger.warning(f"Unit {self.unit_id}: FC{fc} - Generic Modbus error at {current_address}. Skipping block.")
-                    results["errors"].append({"address": current_address, "type": "generic_error"})
+        if test_count <= 0:
+            logger.info(f"Unit {self.unit_id}: FC{fc} - No addresses to scan up to max_addr {max_addr} from start {test_address}. Skipping dump.")
+            scan_result["status"] = "skipped_no_range"
+            return scan_result
 
-                current_address += read_count # Move to next block even on error (unless it's an error we adapt to by retrying)
-                read_count = MAX_READ_COUNT_COILS if fc in [FC_READ_COILS, FC_READ_DISCRETE_INPUTS] else MAX_READ_COUNT_REGISTERS # Reset read_count
+        response = await self._execute_read_request(fc, test_address, test_count)
 
-            else: # Successful read
-                data = None
-                actual_count = 0
-                if fc == FC_READ_COILS or fc == FC_READ_DISCRETE_INPUTS:
-                    data = response.bits
-                    actual_count = len(response.bits) # pymodbus might return more than requested, up to byte boundary
-                elif fc == FC_READ_HOLDING_REGISTERS or fc == FC_READ_INPUT_REGISTERS:
-                    data = response.registers
-                    actual_count = len(response.registers)
+        if response is None:
+            error_detail = {"address": test_address, "type": "timeout_or_comms_error", "message": f"No response for FC{fc} at {test_address} count {test_count}"}
+            scan_result["errors"].append(error_detail)
+            scan_result["status"] = "failed"
+            logger.warning(f"Unit {self.unit_id}: FC{fc} @ {test_address} - {error_detail['message']}")
+        elif response.isError():
+            error_type = "modbus_exception"
+            error_code = getattr(response, 'exception_code', 'N/A')
+            if isinstance(response, ExceptionResponse):
+                 error_message = f"Modbus Exception Code: {response.exception_code}"
+            else:
+                 error_message = str(response)
 
-                if data:
-                    # We need to ensure we only take 'read_count' items from the start of the block
-                    # because the device might return less than 'read_count' if we are near the end of its address space.
-                    # The 'actual_count' is what the device returned. 'read_count' is what we asked for.
-                    # The number of valid items is min(actual_count, read_count).
-                    num_valid_items = min(actual_count, read_count)
-                    valid_data = data[:num_valid_items]
+            error_detail = {"address": test_address, "type": error_type, "code": error_code, "message": error_message}
+            scan_result["errors"].append(error_detail)
+            scan_result["status"] = "failed_exception"
+            logger.warning(f"Unit {self.unit_id}: FC{fc} @ {test_address} - {error_message} (Code: {error_code})")
+        else:
+            # Successful read (for this basic test)
+            data_values = []
+            if is_coil_type:
+                data_values = response.bits[:test_count]
+            else: # Register type
+                data_values = response.registers[:test_count]
 
-                    logger.info(f"Unit {self.unit_id}: FC{fc} @ {current_address}-{current_address + num_valid_items - 1} -> Read {num_valid_items} items.")
-                    results["data"].append({
-                        "start_address": current_address,
-                        "values": valid_data
-                    })
-                current_address += read_count # Move to the next block
-                # Potentially reset read_count if it was reduced due to errors
-                read_count = MAX_READ_COUNT_COILS if fc in [FC_READ_COILS, FC_READ_DISCRETE_INPUTS] else MAX_READ_COUNT_REGISTERS
+            if data_values:
+                scan_result["valid_ranges"].append({
+                    "start_address": test_address,
+                    "count": len(data_values), # Actual number of items read and returned
+                    "values": data_values
+                })
+                scan_result["status"] = "success" # Or "partial_success" if adaptive scanning was incomplete
+                logger.info(f"Unit {self.unit_id}: FC{fc} @ {test_address} - Successfully read {len(data_values)} items.")
+            else:
+                scan_result["status"] = "success_no_data" # Valid response but no data (e.g. read 0 items successfully)
+                logger.info(f"Unit {self.unit_id}: FC{fc} @ {test_address} - Read successful but no data returned in response list.")
 
-
-        logger.info(f"Unit {self.unit_id}: Finished adaptive scan for FC{fc}.")
-        return results
+        logger.info(f"Unit {self.unit_id}: Finished data discovery for FC{fc}. Status: {scan_result['status']}")
+        return scan_result
 
 
 # Example Usage (for testing this module)
+# The main_test_scanner() function and its call are removed to prevent syntax errors
+# during import, as this file is not intended to be run directly anymore.
+# For module-specific tests, use the unittest framework in the tests/ directory.
 async def main_test_scanner():
     # Setup basic logging for testing
     console = None
